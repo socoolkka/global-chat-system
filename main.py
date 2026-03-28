@@ -1,18 +1,17 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List
+from typing import List, Dict
 from datetime import datetime, timedelta
 
 app = FastAPI()
 
-# CORS設定
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # すべてのオリジンからのアクセスを許可（本番環境では特定のオリジンに制限することを推奨）
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # すべてのHTTPメソッドを許可
-    allow_headers=["*"],  # すべてのHTTPヘッダーを許可
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 class Message(BaseModel):
@@ -20,42 +19,51 @@ class Message(BaseModel):
     content: str
 
 class StoredMessage(Message):
-    timestamp: str # 表示用のフォーマットされた日時
-    created_at: datetime # 内部処理用の正確な日時
+    timestamp: str
+    created_at: datetime
 
-# 最新のメッセージを保持するリスト（メモリ内）
+# データ保持
 messages: List[StoredMessage] = []
-MAX_MESSAGES = 50  # 保持する最大メッセージ数
-MESSAGE_LIFETIME_HOURS = 24 # メッセージの保持期間（時間）
+user_status: Dict[str, datetime] = {} # ユーザー名: 最終アクティブ時間
 
-@app.get("/")
-async def read_root():
-    return {"message": "Chat API is running!"}
+MAX_MESSAGES = 100
+MESSAGE_LIFETIME_HOURS = 24
+ONLINE_THRESHOLD_SECONDS = 10 # 10秒以内に通信があればオンライン
 
-@app.get("/messages", response_model=List[StoredMessage])
-async def get_messages():
-    # 24時間以上経過したメッセージをフィルタリング
+@app.get("/messages")
+async def get_messages(username: str = None):
+    # 通信があったユーザーのアクティブ時間を更新
+    if username:
+        user_status[username] = datetime.now()
+    
+    # 24時間経過メッセージ削除
     global messages
     now = datetime.now()
     messages = [msg for msg in messages if now - msg.created_at < timedelta(hours=MESSAGE_LIFETIME_HOURS)]
-    return messages
+    
+    # オンラインユーザーのリストを作成
+    online_users = [
+        u for u, last_seen in user_status.items() 
+        if now - last_seen < timedelta(seconds=ONLINE_THRESHOLD_SECONDS)
+    ]
+    
+    return {
+        "messages": messages,
+        "online_users": online_users
+    }
 
 @app.post("/send")
 async def send_message(message: Message):
     now = datetime.now()
-    # 表示用の日時フォーマット (例: 03/28 15:30)
-    formatted_timestamp = now.strftime("%m/%d %H:%M")
+    user_status[message.username] = now # 送信時もアクティブ更新
     
     stored_message = StoredMessage(
         username=message.username,
         content=message.content,
-        timestamp=formatted_timestamp,
+        timestamp=now.strftime("%m/%d %H:%M"),
         created_at=now
     )
     messages.append(stored_message)
-
-    # 古いメッセージを削除（MAX_MESSAGESを超えた場合）
     if len(messages) > MAX_MESSAGES:
-        messages.pop(0) # 最も古いメッセージを削除
-
-    return {"success": True, "message": stored_message}
+        messages.pop(0)
+    return {"success": True}
