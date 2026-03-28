@@ -5,13 +5,13 @@ from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 import logging
 
-# エラーログを表示するように設定
+# ログの設定
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# CORS設定（Robloxからの通信を許可）
+# CORS設定
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,10 +20,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# データモデル
+# メッセージのデータモデル
 class Message(BaseModel):
     username: str
     content: str
+    reply_to: Optional[str] = None
+    reply_content: Optional[str] = None
 
 class StoredMessage(Message):
     timestamp: str
@@ -36,66 +38,56 @@ user_last_seen: Dict[str, datetime] = {}
 # 定数
 MAX_MESSAGES = 100
 MESSAGE_LIFETIME_HOURS = 24
-ONLINE_THRESHOLD_SECONDS = 20 # 20秒以内に通信があればオンライン
+ONLINE_THRESHOLD_SECONDS = 20
 
 @app.get("/")
 async def root():
-    return {"message": "Chat API is running!", "status": "ok"}
+    # バージョン表示を v4 に更新
+    return {"message": "Chat API v4 is running!", "status": "ok"}
 
 @app.get("/messages")
 async def get_messages(username: Optional[str] = None):
-    try:
-        now = datetime.now()
-        
-        # 通信があったユーザーのアクティブ時間を更新
-        if username:
-            user_last_seen[username] = now
-            logger.info(f"User active: {username}")
-        
-        # 24時間経過したメッセージを削除
-        global messages_list
-        messages_list = [msg for msg in messages_list if now - msg.created_at < timedelta(hours=MESSAGE_LIFETIME_HOURS)]
-        
-        # オンラインユーザーのリストを作成
-        online_users = [
-            u for u, last_seen in user_last_seen.items() 
-            if now - last_seen < timedelta(seconds=ONLINE_THRESHOLD_SECONDS)
-        ]
-        
-        # メッセージを辞書形式に変換して返す
-        return {
-            "messages": [
-                {"username": m.username, "content": m.content, "timestamp": m.timestamp} 
-                for m in messages_list
-            ],
-            "online_users": online_users
-        }
-    except Exception as e:
-        logger.error(f"Error in get_messages: {e}")
-        return {"messages": [], "online_users": [], "error": str(e)}
+    now = datetime.now()
+    if username:
+        user_last_seen[username] = now
+    
+    global messages_list
+    messages_list = [
+        m for m in messages_list 
+        if now - m.created_at < timedelta(hours=MESSAGE_LIFETIME_HOURS)
+    ]
+    
+    online_users = [
+        u for u, last_seen in user_last_seen.items() 
+        if now - last_seen < timedelta(seconds=ONLINE_THRESHOLD_SECONDS)
+    ]
+    
+    return {
+        "messages": messages_list,
+        "online_users": online_users
+    }
 
 @app.post("/send")
 async def send_message(message: Message):
     try:
         now = datetime.now()
-        # 送信者もオンラインとして記録
         user_last_seen[message.username] = now
         
-        new_msg = StoredMessage(
+        stored_message = StoredMessage(
             username=message.username,
             content=message.content,
+            reply_to=message.reply_to,
+            reply_content=message.reply_content,
             timestamp=now.strftime("%m/%d %H:%M"),
             created_at=now
         )
         
-        messages_list.append(new_msg)
-        
-        # 最大数を超えたら古いものを削除
+        messages_list.append(stored_message)
         if len(messages_list) > MAX_MESSAGES:
             messages_list.pop(0)
             
-        logger.info(f"Message sent by {message.username}")
+        logger.info(f"v4: Message from {message.username}")
         return {"success": True}
     except Exception as e:
-        logger.error(f"Error in send_message: {e}")
+        logger.error(f"Error in v4 send_message: {e}")
         return {"success": False, "error": str(e)}
