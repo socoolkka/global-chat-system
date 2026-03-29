@@ -16,19 +16,24 @@ class Message(BaseModel):
     target: str = "global-chat"
     is_dm: bool = False
     is_sticker: bool = False
-    game_name: Optional[str] = "Unknown Game" # ゲーム名を追加
+    game_name: Optional[str] = "Unknown Game"
     place_id: Optional[int] = None
     job_id: Optional[str] = None
     reply_to: Optional[str] = None
     reply_content: Optional[str] = None
 
+# ブラウザでアクセスした時に表示されるメッセージ
 @app.get("/")
 def read_root():
-    return {"status": "Chat API v8 (Game Names & JobId) is running!"}
+    return {"status": "Chat API v8 (Ultimate Edition) is running!"}
+
+@app.get("/servers")
+def get_servers():
+    return {"servers": [s for s in chat_data.keys() if not s.startswith("dm_")]}
 
 @app.get("/messages")
 def get_messages(username: str, target: str = "global-chat", is_dm: bool = False, game_name: str = "Unknown", place_id: int = 0, job_id: str = ""):
-    # ユーザーのステータスを更新
+    # ユーザーのステータス（JobId, ゲーム名含む）を更新
     online_users[username] = {
         "time": time.time(),
         "game_name": game_name,
@@ -45,6 +50,7 @@ def get_messages(username: str, target: str = "global-chat", is_dm: bool = False
         chat_data[room_id] = []
         
     current_time = time.time()
+    # 20秒以内に通信があった全ユーザーを表示
     active_users = {u: info for u, info in online_users.items() if current_time - info["time"] < 20}
     
     return {
