@@ -1,93 +1,83 @@
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import List, Dict, Optional
-from datetime import datetime, timedelta
-import logging
-
-# ログの設定
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from typing import List, Optional, Dict
+import time
+from datetime import datetime
 
 app = FastAPI()
 
-# CORS設定
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# データ構造
+chat_data: Dict[str, List[dict]] = {"global-chat": []}
+online_users: Dict[str, dict] = {} # {username: {"time": float, "game_name": str, "place_id": int, "job_id": str}}
 
-# メッセージのデータモデル
 class Message(BaseModel):
     username: str
     content: str
+    target: str = "global-chat"
+    is_dm: bool = False
+    is_sticker: bool = False
+    game_name: Optional[str] = "Unknown Game" # ゲーム名を追加
+    place_id: Optional[int] = None
+    job_id: Optional[str] = None
     reply_to: Optional[str] = None
     reply_content: Optional[str] = None
 
-class StoredMessage(Message):
-    timestamp: str
-    created_at: datetime
-
-# メモリ内データ保持
-messages_list: List[StoredMessage] = []
-user_last_seen: Dict[str, datetime] = {}
-
-# 定数
-MAX_MESSAGES = 100
-MESSAGE_LIFETIME_HOURS = 24
-ONLINE_THRESHOLD_SECONDS = 20
-
 @app.get("/")
-async def root():
-    # バージョン表示を v4 に更新
-    return {"message": "Chat API v4 is running!", "status": "ok"}
+def read_root():
+    return {"status": "Chat API v8 (Game Names & JobId) is running!"}
 
 @app.get("/messages")
-async def get_messages(username: Optional[str] = None):
-    now = datetime.now()
-    if username:
-        user_last_seen[username] = now
+def get_messages(username: str, target: str = "global-chat", is_dm: bool = False, game_name: str = "Unknown", place_id: int = 0, job_id: str = ""):
+    # ユーザーのステータスを更新
+    online_users[username] = {
+        "time": time.time(),
+        "game_name": game_name,
+        "place_id": place_id,
+        "job_id": job_id
+    }
     
-    global messages_list
-    messages_list = [
-        m for m in messages_list 
-        if now - m.created_at < timedelta(hours=MESSAGE_LIFETIME_HOURS)
-    ]
+    room_id = target
+    if is_dm:
+        users = sorted([username, target])
+        room_id = f"dm_{users[0]}_{users[1]}"
     
-    online_users = [
-        u for u, last_seen in user_last_seen.items() 
-        if now - last_seen < timedelta(seconds=ONLINE_THRESHOLD_SECONDS)
-    ]
+    if room_id not in chat_data:
+        chat_data[room_id] = []
+        
+    current_time = time.time()
+    active_users = {u: info for u, info in online_users.items() if current_time - info["time"] < 20}
     
     return {
-        "messages": messages_list,
-        "online_users": online_users
+        "messages": chat_data.get(room_id, []),
+        "online_users": active_users,
+        "room_id": room_id
     }
 
 @app.post("/send")
-async def send_message(message: Message):
-    try:
-        now = datetime.now()
-        user_last_seen[message.username] = now
+async def send_message(msg: Message):
+    room_id = msg.target
+    if msg.is_dm:
+        users = sorted([msg.username, msg.target])
+        room_id = f"dm_{users[0]}_{users[1]}"
         
-        stored_message = StoredMessage(
-            username=message.username,
-            content=message.content,
-            reply_to=message.reply_to,
-            reply_content=message.reply_content,
-            timestamp=now.strftime("%m/%d %H:%M"),
-            created_at=now
-        )
+    if room_id not in chat_data:
+        chat_data[room_id] = []
         
-        messages_list.append(stored_message)
-        if len(messages_list) > MAX_MESSAGES:
-            messages_list.pop(0)
-            
-        logger.info(f"v4: Message from {message.username}")
-        return {"success": True}
-    except Exception as e:
-        logger.error(f"Error in v4 send_message: {e}")
-        return {"success": False, "error": str(e)}
+    new_msg = {
+        "username": msg.username,
+        "content": msg.content,
+        "timestamp": datetime.now().strftime("%H:%M"),
+        "is_sticker": msg.is_sticker,
+        "game_name": msg.game_name,
+        "place_id": msg.place_id,
+        "job_id": msg.job_id,
+        "reply_to": msg.reply_to,
+        "reply_content": msg.reply_content,
+        "is_dm": msg.is_dm
+    }
+    
+    chat_data[room_id].append(new_msg)
+    if len(chat_data[room_id]) > 100:
+        chat_data[room_id].pop(0)
+        
+    return {"status": "sent", "room": room_id}
